@@ -642,33 +642,22 @@
         this.renderText();
       }
       renderText() {
-        const palette = [
-          [0,0,0],[0,0,170],[0,170,0],[0,170,170],[170,0,0],[170,0,170],[170,85,0],[170,170,170],
-          [85,85,85],[85,85,255],[85,255,85],[85,255,255],[255,85,85],[255,85,255],[255,255,85],[255,255,255]
-        ];
-        const img = this.ctx.createImageData(720, 400);
-        const data = img.data;
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        this.ctx.fillStyle = '#000';
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        this.ctx.font = '16px monospace';
+        this.ctx.textBaseline = 'top';
+        this.ctx.fillStyle = '#7CFC00';
         for (let y = 0; y < 25; y++) {
           for (let x = 0; x < 80; x++) {
             const v = this.textBuffer[y * 80 + x];
             const ch = v & 0xFF;
-            const attr = (v >> 8) & 0xFF;
-            const fg = attr & 0x0F;
-            const bg = (attr >> 4) & 0x07;
-            const sx = x * 9; const sy = y * 16;
-            for (let yy = 0; yy < 16; yy++) {
-              for (let xx = 0; xx < 8; xx++) {
-                const bit = 0;
-                const color = bit ? fg : bg;
-                const rgb = palette[color % 16];
-                const px = (sy + yy) * 720 + (sx + xx);
-                const i = px * 4;
-                data[i] = rgb[0]; data[i + 1] = rgb[1]; data[i + 2] = rgb[2]; data[i + 3] = 255;
-              }
-            }
+            if (!ch) continue;
+            const px = x * 9;
+            const py = y * 16;
+            this.ctx.fillText(String.fromCharCode(ch), px, py);
           }
         }
-        this.ctx.putImageData(img, 0, 0);
       }
       refresh() {
         if (this.mode === 0x13) {
@@ -919,17 +908,22 @@
       setup() {
         this.bios.init();
         this.cpu.reset();
-        this.cpu.regs.CS = 0xF000;
-        this.cpu.regs.EIP = 0xFFF0;
+        this.cpu.regs.CS = 0;
+        this.cpu.regs.EIP = 0x7C00;
         this.cpu.regs.ESP = 0x7C00;
         this.cpu.regs.SS = 0;
         this.cpu.regs.ES = 0x9000;
         this.cpu.regs.DS = 0x9000;
         this.vga.setMode(0x03);
         this.vga.refresh();
-        this.mem.write16(0x7C00 + 510, 0xAA55);
+
         const boot = new Uint8Array(512);
-        boot[0] = 0xEB; boot[1] = 0x3C; boot[2] = 0x90;
+        boot[0] = 0xB8; boot[1] = 0x03; boot[2] = 0x00; // MOV AX, 0x0003
+        boot[3] = 0xCD; boot[4] = 0x10; // INT 0x10
+        boot[5] = 0xB4; boot[6] = 0x0E; // MOV AH, 0x0E
+        boot[7] = 0xB0; boot[8] = 0x43; // MOV AL, 'C'
+        boot[9] = 0xCD; boot[10] = 0x10; // INT 0x10
+        boot[11] = 0xF4; // HLT
         boot[510] = 0x55; boot[511] = 0xAA;
         this.mem.writeBytes(0x7C00, boot);
       }
@@ -938,8 +932,8 @@
         this.running = true;
         this.paused = false;
         this.cpu.reset();
-        this.cpu.regs.CS = 0xF000;
-        this.cpu.regs.EIP = 0xFFF0;
+        this.cpu.regs.CS = 0;
+        this.cpu.regs.EIP = 0x7C00;
         this.cpu.regs.ESP = 0x7C00;
         this.cpu.regs.SS = 0;
         this.cpu.regs.ES = 0x9000;
@@ -998,59 +992,39 @@
     document.getElementById('resetBtn').addEventListener('click', () => vm.reset());
     document.getElementById('pauseBtn').addEventListener('click', () => vm.pause());
     document.getElementById('fullscreenBtn').addEventListener('click', () => {
-      const c = document.getElementById('display');
-      if (c.requestFullscreen) c.requestFullscreen();
-    });
-    document.getElementById('factoryBtn').addEventListener('click', () => location.reload());
-    document.getElementById('cpuHz').addEventListener('change', (e) => {
-      document.getElementById('clockLabel').textContent = e.target.value + ' MHz';
+      const canvas = document.getElementById('display');
+      if (!document.fullscreenElement) canvas.requestFullscreen?.();
+      else document.exitFullscreen?.();
     });
     document.getElementById('importBtn').addEventListener('click', () => {
       document.getElementById('fileInput').click();
     });
-
-    document.getElementById('fileInput').addEventListener('change', (e) => {
-      const files = Array.from(e.target.files || []);
-      files.forEach(file => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const bytes = new Uint8Array(reader.result);
-          const text = Array.from(bytes).map(b => String.fromCharCode(b)).join('');
-          vm.dos.fs.set('C:\\' + file.name, text);
-          logLine('Imported: ' + file.name);
-        };
-        reader.readAsArrayBuffer(file);
-      });
-      e.target.value = '';
+    document.getElementById('factoryBtn').addEventListener('click', () => {
+      document.getElementById('consoleOutput').textContent = 'Factory reset complete.\n';
+      vm.reset();
     });
-
-    document.getElementById('clockLabel').textContent = '33 MHz';
-    document.getElementById('ramLabel').textContent = '4 MB';
-    document.getElementById('vmState').textContent = 'powered off';
-
-    const input = document.createElement('input');
-    input.setAttribute('placeholder', 'Type a DOS command');
-    input.style.position = 'fixed';
-    input.style.bottom = '12px';
-    input.style.left = '12px';
-    input.style.right = '12px';
-    input.style.padding = '10px';
-    input.style.borderRadius = '8px';
-    input.style.border = '1px solid rgba(255,255,255,.08)';
-    input.style.background = '#121820';
-    input.style.color = '#e8edf3';
-    input.style.zIndex = '10';
-    document.body.appendChild(input);
-
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        vm.shell.runCommand(input.value);
-        input.value = '';
-        logLine('C:\\>');
+    document.getElementById('cpuHz').addEventListener('change', (e) => {
+      const hz = Number(e.target.value);
+      document.getElementById('clockLabel').textContent = `${hz} MHz`;
+      if (vm.tick) {
+        clearInterval(vm.tick);
+        vm.tick = setInterval(() => vm.step(), 1000 / (hz * 1000));
       }
     });
 
-    logLine('System ready.');
+    document.getElementById('fileInput').addEventListener('change', (event) => {
+      const files = Array.from(event.target.files || []);
+      for (const file of files) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const buffer = new Uint8Array(reader.result || []);
+          const path = 'C:\\' + file.name;
+          vm.dos.fs.set(path, Array.from(buffer).map(b => String.fromCharCode(b)).join(''));
+          logLine(`Imported ${file.name}`);
+        };
+        reader.readAsArrayBuffer(file);
+      }
+    });
   </script>
 </body>
 </html>
