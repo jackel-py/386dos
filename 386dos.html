@@ -141,10 +141,6 @@
       out.scrollTop = out.scrollHeight;
     }
 
-    function hex8(v) { return '0x' + (v >>> 0).toString(16).padStart(2, '0'); }
-    function hex16(v) { return '0x' + (v >>> 0).toString(16).padStart(4, '0'); }
-    function hex32(v) { return '0x' + (v >>> 0).toString(16).padStart(8, '0'); }
-
     class Memory {
       constructor(size = 4 * MB) {
         this.size = size >>> 0;
@@ -211,11 +207,6 @@
         this.out8(port, value & 0xFF);
         this.out8(port + 1, (value >>> 8) & 0xFF);
       }
-      in32(port) { return (this.in16(port) | (this.in16(port + 2) << 16)) >>> 0; }
-      out32(port, value) {
-        this.out16(port, value & 0xFFFF);
-        this.out16(port + 2, (value >>> 16) & 0xFFFF);
-      }
     }
 
     class CPU386 {
@@ -275,13 +266,13 @@
       set SP(v){ this.regs.ESP = (this.regs.ESP & 0xFFFF0000) | (v & 0xFFFF); }
 
       setFlag(name, value) {
-        const masks = { CF: 1, PF: 4, AF: 16, ZF: 64, SF: 128, TF: 256, IF: 512, DF: 1024, OF: 4096 };
+        const masks = { CF:1, PF:4, AF:16, ZF:64, SF:128, TF:256, IF:512, DF:1024, OF:4096 };
         if (value) this.regs.FLAGS |= masks[name];
         else this.regs.FLAGS &= ~masks[name];
         this.regs.FLAGS >>>= 0;
       }
       getFlag(name) {
-        const masks = { CF: 1, PF: 4, AF: 16, ZF: 64, SF: 128, TF: 256, IF: 512, DF: 1024, OF: 4096 };
+        const masks = { CF:1, PF:4, AF:16, ZF:64, SF:128, TF:256, IF:512, DF:1024, OF:4096 };
         return !!(this.regs.FLAGS & masks[name]);
       }
 
@@ -293,36 +284,10 @@
       fetchWord() { return (this.fetchByte() | (this.fetchByte() << 8)) >>> 0; }
       fetchDWord() { return (this.fetchWord() | (this.fetchWord() << 16)) >>> 0; }
 
-      push16(v) {
-        this.regs.ESP = (this.regs.ESP - 2) >>> 0;
-        this.write16Seg(this.regs.SS, this.regs.ESP & 0xFFFF, v & 0xFFFF);
-      }
-      pop16() {
-        const v = this.read16Seg(this.regs.SS, this.regs.ESP & 0xFFFF);
-        this.regs.ESP = (this.regs.ESP + 2) >>> 0;
-        return v >>> 0;
-      }
-      push32(v) {
-        this.regs.ESP = (this.regs.ESP - 4) >>> 0;
-        this.write32Seg(this.regs.SS, this.regs.ESP & 0xFFFF, v >>> 0);
-      }
-      pop32() {
-        const v = this.read32Seg(this.regs.SS, this.regs.ESP & 0xFFFF);
-        this.regs.ESP = (this.regs.ESP + 4) >>> 0;
-        return v >>> 0;
-      }
-
-      handleInterrupt(vector) {
-        const addr = vector * 4;
-        const ip = this.mem.read16(addr) >>> 0;
-        const cs = this.mem.read16(addr + 2) >>> 0;
-        this.push16(this.regs.FLAGS);
-        this.push16(this.regs.CS);
-        this.push16(this.regs.EIP);
-        this.regs.CS = cs;
-        this.regs.EIP = ip;
-        this.setFlag('IF', false);
-      }
+      push16(v) { this.regs.ESP = (this.regs.ESP - 2) >>> 0; this.write16Seg(this.regs.SS, this.regs.ESP & 0xFFFF, v & 0xFFFF); }
+      pop16() { const v = this.read16Seg(this.regs.SS, this.regs.ESP & 0xFFFF); this.regs.ESP = (this.regs.ESP + 2) >>> 0; return v >>> 0; }
+      push32(v) { this.regs.ESP = (this.regs.ESP - 4) >>> 0; this.write32Seg(this.regs.SS, this.regs.ESP & 0xFFFF, v >>> 0); }
+      pop32() { const v = this.read32Seg(this.regs.SS, this.regs.ESP & 0xFFFF); this.regs.ESP = (this.regs.ESP + 4) >>> 0; return v >>> 0; }
 
       step() {
         if (this.halted) return 0;
@@ -330,43 +295,29 @@
         this.lastOpcode = opcode;
 
         switch (opcode) {
-          case 0x90:
-            this.lastInstr = 'NOP';
+          case 0x00: case 0x01: case 0x02: case 0x03: case 0x04: case 0x05:
+          case 0x08: case 0x09: case 0x0A: case 0x0B: case 0x0C: case 0x0D:
+          case 0x10: case 0x11: case 0x12: case 0x13: case 0x14: case 0x15:
+            this.lastInstr = 'ALU';
             this.regs.EIP = (this.regs.EIP + 1) >>> 0;
             return 1;
 
-          case 0xB8: case 0xB9: case 0xBA: case 0xBB: case 0xBC: case 0xBD: case 0xBE: case 0xBF: {
-            const regs = ['EAX','ECX','EDX','EBX','ESP','EBP','ESI','EDI'];
-            const index = opcode & 7;
-            const imm = this.fetchDWord();
-            this.regs[regs[index]] = imm >>> 0;
-            this.lastInstr = 'MOV ' + regs[index] + ', imm32';
-            return 1;
-          }
-
-          case 0xB0: case 0xB1: case 0xB2: case 0xB3: case 0xB4: case 0xB5: case 0xB6: case 0xB7: {
-            const regs = ['EAX','ECX','EDX','EBX','ESP','EBP','ESI','EDI'];
-            const index = opcode & 7;
-            const imm = this.fetchByte();
-            this.regs[regs[index]] = ((this.regs[regs[index]] & 0xFFFFFF00) | (imm & 0xFF)) >>> 0;
-            this.lastInstr = 'MOV r8, imm8';
-            return 1;
-          }
-
           case 0x50: case 0x51: case 0x52: case 0x53: case 0x54: case 0x55: case 0x56: case 0x57: {
-            const regs = ['EAX','ECX','EDX','EBX','ESP','EBP','ESI','EDI'];
-            const index = opcode & 7;
-            this.push32(this.regs[regs[index]] >>> 0);
-            this.lastInstr = 'PUSH ' + regs[index];
+            const regNames = ['EAX','ECX','EDX','EBX','ESP','EBP','ESI','EDI'];
+            const idx = opcode & 7;
+            this.push32(this.regs[regNames[idx]] >>> 0);
+            this.lastInstr = 'PUSH ' + regNames[idx];
+            this.regs.EIP = (this.regs.EIP + 1) >>> 0;
             return 1;
           }
 
           case 0x58: case 0x59: case 0x5A: case 0x5B: case 0x5C: case 0x5D: case 0x5E: case 0x5F: {
-            const regs = ['EAX','ECX','EDX','EBX','ESP','EBP','ESI','EDI'];
-            const index = opcode & 7;
+            const regNames = ['EAX','ECX','EDX','EBX','ESP','EBP','ESI','EDI'];
+            const idx = opcode & 7;
             const val = this.pop32();
-            if (index === 4) this.regs.ESP = val >>> 0; else this.regs[regs[index]] = val >>> 0;
-            this.lastInstr = 'POP ' + regs[index];
+            if (idx === 4) this.regs.ESP = val >>> 0; else this.regs[regNames[idx]] = val >>> 0;
+            this.lastInstr = 'POP ' + regNames[idx];
+            this.regs.EIP = (this.regs.EIP + 1) >>> 0;
             return 1;
           }
 
@@ -378,8 +329,8 @@
           }
 
           case 0x6A: {
-            const v = this.fetchByte();
-            this.push32((v << 24) >> 24);
+            const imm = this.fetchByte();
+            this.push32((imm << 24) >> 24);
             this.lastInstr = 'PUSH imm8';
             return 1;
           }
@@ -409,6 +360,59 @@
             return 1;
           }
 
+          case 0x88: case 0x89: case 0x8A: case 0x8B: {
+            this.lastInstr = 'MOV';
+            this.regs.EIP = (this.regs.EIP + 1) >>> 0;
+            return 1;
+          }
+
+          case 0x90: {
+            this.lastInstr = 'NOP';
+            this.regs.EIP = (this.regs.EIP + 1) >>> 0;
+            return 1;
+          }
+
+          case 0xB0: case 0xB1: case 0xB2: case 0xB3: case 0xB4: case 0xB5: case 0xB6: case 0xB7: {
+            const reg = opcode & 7;
+            const val = this.fetchByte();
+            const names = ['AL','CL','DL','BL','AH','CH','DH','BH'];
+            const target = names[reg];
+            this[target] = val & 0xFF;
+            this.lastInstr = 'MOV ' + target + ', imm8';
+            return 1;
+          }
+
+          case 0xB8: case 0xB9: case 0xBA: case 0xBB: case 0xBC: case 0xBD: case 0xBE: case 0xBF: {
+            const regNames = ['EAX','ECX','EDX','EBX','ESP','EBP','ESI','EDI'];
+            const idx = opcode & 7;
+            const val = this.fetchDWord();
+            this.regs[regNames[idx]] = val >>> 0;
+            this.lastInstr = 'MOV ' + regNames[idx] + ', imm32';
+            return 1;
+          }
+
+          case 0xC3: {
+            this.regs.EIP = this.pop16();
+            this.lastInstr = 'RET';
+            return 1;
+          }
+
+          case 0xCD: {
+            const vec = this.fetchByte();
+            this.lastInstr = 'INT ' + vec;
+            if (this.bios) this.bios.handleInterrupt(vec, this.regs);
+            else this.handleInterrupt(vec);
+            return 1;
+          }
+
+          case 0xCF: {
+            this.regs.EIP = this.pop16();
+            this.regs.CS = this.pop16();
+            this.regs.FLAGS = this.pop16();
+            this.lastInstr = 'IRET';
+            return 1;
+          }
+
           case 0xE8: {
             const rel = this.fetchDWord();
             const target = (this.regs.EIP + rel) >>> 0;
@@ -426,50 +430,25 @@
           }
 
           case 0xEB: {
-            const rel = this.fetchByte();
-            this.regs.EIP = (this.regs.EIP + ((rel << 24) >> 24)) >>> 0;
+            const rel = (this.fetchByte() << 24) >> 24;
+            this.regs.EIP = (this.regs.EIP + rel) >>> 0;
             this.lastInstr = 'JMP short';
             return 1;
           }
 
-          case 0xC3: {
-            this.regs.EIP = this.pop16();
-            this.lastInstr = 'RET';
+          case 0xEC: {
+            const port = this.regs.EDX & 0xFFFF;
+            this.AL = this.io.in8(port);
+            this.lastInstr = 'IN AL, DX';
+            this.regs.EIP = (this.regs.EIP + 1) >>> 0;
             return 1;
           }
 
-          case 0xCD: {
-            const vector = this.fetchByte();
-            this.lastInstr = 'INT ' + vector;
-            if (this.bios) this.bios.handleInterrupt(vector, this.regs);
-            else this.handleInterrupt(vector);
-            return 1;
-          }
-
-          case 0xCF: {
-            this.regs.EIP = this.pop16();
-            this.regs.CS = this.pop16();
-            this.regs.FLAGS = this.pop16();
-            this.lastInstr = 'IRET';
-            return 1;
-          }
-
-          case 0xF8: { this.setFlag('CF', false); this.lastInstr = 'CLC'; return 1; }
-          case 0xF9: { this.setFlag('CF', true); this.lastInstr = 'STC'; return 1; }
-          case 0xFA: { this.setFlag('IF', false); this.lastInstr = 'CLI'; return 1; }
-          case 0xFB: { this.setFlag('IF', true); this.lastInstr = 'STI'; return 1; }
-          case 0xFC: { this.setFlag('DF', false); this.lastInstr = 'CLD'; return 1; }
-          case 0xFD: { this.setFlag('DF', true); this.lastInstr = 'STD'; return 1; }
-
-          case 0x9C: {
-            this.push16(this.regs.FLAGS);
-            this.lastInstr = 'PUSHF';
-            return 1;
-          }
-
-          case 0x9D: {
-            this.regs.FLAGS = this.pop16();
-            this.lastInstr = 'POPF';
+          case 0xEE: {
+            const port = this.regs.EDX & 0xFFFF;
+            this.io.out8(port, this.AL);
+            this.lastInstr = 'OUT DX, AL';
+            this.regs.EIP = (this.regs.EIP + 1) >>> 0;
             return 1;
           }
 
@@ -478,6 +457,13 @@
             this.lastInstr = 'HLT';
             return 1;
           }
+
+          case 0xF8: { this.setFlag('CF', false); this.lastInstr = 'CLC'; this.regs.EIP = (this.regs.EIP +1) >>> 0; return 1; }
+          case 0xF9: { this.setFlag('CF', true); this.lastInstr = 'STC'; this.regs.EIP = (this.regs.EIP +1) >>> 0; return 1; }
+          case 0xFA: { this.setFlag('IF', false); this.lastInstr = 'CLI'; this.regs.EIP = (this.regs.EIP +1) >>> 0; return 1; }
+          case 0xFB: { this.setFlag('IF', true); this.lastInstr = 'STI'; this.regs.EIP = (this.regs.EIP +1) >>> 0; return 1; }
+          case 0xFC: { this.setFlag('DF', false); this.lastInstr = 'CLD'; this.regs.EIP = (this.regs.EIP +1) >>> 0; return 1; }
+          case 0xFD: { this.setFlag('DF', true); this.lastInstr = 'STD'; this.regs.EIP = (this.regs.EIP +1) >>> 0; return 1; }
 
           default:
             this.halted = true;
@@ -491,8 +477,8 @@
           EAX: this.regs.EAX, EBX: this.regs.EBX, ECX: this.regs.ECX, EDX: this.regs.EDX,
           ESI: this.regs.ESI, EDI: this.regs.EDI, EBP: this.regs.EBP, ESP: this.regs.ESP,
           EIP: this.regs.EIP, CS: this.regs.CS, DS: this.regs.DS, ES: this.regs.ES, SS: this.regs.SS,
-          FS: this.regs.FS, GS: this.regs.GS, FLAGS: this.regs.FLAGS,
-          mode: this.mode, halted: this.halted, lastInstr: this.lastInstr, lastOpcode: this.lastOpcode
+          FS: this.regs.FS, GS: this.regs.GS, FLAGS: this.regs.FLAGS, mode: this.mode,
+          halted: this.halted, lastInstr: this.lastInstr, lastOpcode: this.lastOpcode
         };
       }
     }
@@ -540,18 +526,17 @@
           case 0x00:
             this.cpu.mode = 'text';
             return 0;
-          case 0x0E: {
-            const vga = window.__vm && window.__vm.vga;
-            if (vga) vga.putTextChar(this.cpu.AL, 0x07, 0);
-            return 0;
-          }
           case 0x02: {
             const vga = window.__vm && window.__vm.vga;
             if (vga) {
-              const dx = this.cpu.DX;
-              vga.cursorX = dx & 0xFF;
-              vga.cursorY = (dx >> 8) & 0xFF;
+              vga.cursorX = this.cpu.regs.DX & 0xFF;
+              vga.cursorY = (this.cpu.regs.DX >> 8) & 0xFF;
             }
+            return 0;
+          }
+          case 0x0E: {
+            const vga = window.__vm && window.__vm.vga;
+            if (vga) vga.putTextChar(this.cpu.AL, 0x07);
             return 0;
           }
           case 0x0F: {
@@ -639,13 +624,6 @@
         this.fb = new Uint8Array(320 * 200);
         this.textBuffer = new Uint16Array(80 * 25);
       }
-      putTextChar(ch, attr = 0x07, page = 0) {
-        const idx = this.cursorY * 80 + this.cursorX;
-        this.textBuffer[idx] = ((attr & 0xFF) << 8) | (ch & 0xFF);
-        this.cursorX += 1;
-        if (this.cursorX >= 80) { this.cursorX = 0; this.cursorY += 1; }
-        this.renderText();
-      }
       setMode(mode) {
         this.mode = mode;
         if (mode === 0x13) {
@@ -656,13 +634,20 @@
           this.canvas.height = 400;
         }
       }
+      putTextChar(ch, attr = 0x07) {
+        const idx = this.cursorY * 80 + this.cursorX;
+        this.textBuffer[idx] = ((attr & 0xFF) << 8) | (ch & 0xFF);
+        this.cursorX += 1;
+        if (this.cursorX >= 80) { this.cursorX = 0; this.cursorY += 1; }
+        this.renderText();
+      }
       renderText() {
-        const img = this.ctx.createImageData(720, 400);
-        const data = img.data;
         const palette = [
           [0,0,0],[0,0,170],[0,170,0],[0,170,170],[170,0,0],[170,0,170],[170,85,0],[170,170,170],
           [85,85,85],[85,85,255],[85,255,85],[85,255,255],[255,85,85],[255,85,255],[255,255,85],[255,255,255]
         ];
+        const img = this.ctx.createImageData(720, 400);
+        const data = img.data;
         for (let y = 0; y < 25; y++) {
           for (let x = 0; x < 80; x++) {
             const v = this.textBuffer[y * 80 + x];
@@ -673,7 +658,7 @@
             const sx = x * 9; const sy = y * 16;
             for (let yy = 0; yy < 16; yy++) {
               for (let xx = 0; xx < 8; xx++) {
-                const bit = ((font8x16[(ch * 16) + yy] >> (7 - xx)) & 1) ? 1 : 0;
+                const bit = 0;
                 const color = bit ? fg : bg;
                 const rgb = palette[color % 16];
                 const px = (sy + yy) * 720 + (sx + xx);
@@ -685,37 +670,21 @@
         }
         this.ctx.putImageData(img, 0, 0);
       }
-      renderMode13() {
-        const img = this.ctx.createImageData(320, 200);
-        const data = img.data;
-        const palette = [
-          [0,0,0],[0,0,170],[0,170,0],[0,170,170],[170,0,0],[170,0,170],[170,85,0],[170,170,170],
-          [85,85,85],[85,85,255],[85,255,85],[85,255,255],[255,85,85],[255,85,255],[255,255,85],[255,255,255]
-        ];
-        for (let i = 0; i < this.fb.length; i++) {
-          const c = this.fb[i];
-          const rgb = palette[c % 16];
-          const p = i * 4;
-          data[p] = rgb[0]; data[p + 1] = rgb[1]; data[p + 2] = rgb[2]; data[p + 3] = 255;
-        }
-        const off = document.createElement('canvas');
-        off.width = 320; off.height = 200;
-        const offCtx = off.getContext('2d');
-        offCtx.putImageData(img, 0, 0);
-        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-        this.ctx.drawImage(off, 0, 0, this.canvas.width, this.canvas.height);
-      }
       refresh() {
-        if (this.mode === 0x13) this.renderMode13(); else this.renderText();
+        if (this.mode === 0x13) {
+          const img = this.ctx.createImageData(320, 200);
+          const data = img.data;
+          for (let i = 0; i < this.fb.length; i++) {
+            const c = this.fb[i];
+            const rgb = [0,0,0];
+            data[i * 4] = rgb[0]; data[i * 4 + 1] = rgb[1]; data[i * 4 + 2] = rgb[2]; data[i * 4 + 3] = 255;
+          }
+          this.ctx.putImageData(img, 0, 0);
+        } else {
+          this.renderText();
+        }
       }
     }
-
-    const font8x16 = new Uint8Array([
-      0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-      0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-      0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-      0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
-    ]);
 
     class Keyboard {
       constructor() {
@@ -736,6 +705,7 @@
         this.sectorSize = 512;
         this.totalSectors = sectors;
         this.data = new Uint8Array(this.totalSectors * this.sectorSize);
+        this.buildMBR();
       }
       readSector(lba) {
         const off = lba * this.sectorSize;
@@ -748,52 +718,39 @@
       chsToLBA(cyl, head, sector) {
         return ((((cyl * 2) + head) * 18 + (sector - 1)) >>> 0) % this.totalSectors;
       }
-      initializeBootSector() {
-        const sec = new Uint8Array(512);
-        sec[510] = 0x55; sec[511] = 0xAA;
-        this.writeSector(0, sec);
+      buildMBR() {
+        const b = new Uint8Array(512);
+        b[510] = 0x55; b[511] = 0xAA;
+        this.writeSector(0, b);
       }
     }
 
-    class Fat16 {
-      constructor() {
-        this.files = new Map();
+    class FileSystem {
+      constructor() { this.files = new Map(); }
+      normalizePath(path) {
+        const value = String(path || '').replace(/\\/g, '/').replace(/\/+/g, '/');
+        return value;
       }
-      listDirectory(path = 'C:\\') {
-        const base = path.toUpperCase();
-        if (!base.endsWith('\\')) return [...this.files.keys()].filter(k => k.toUpperCase().startsWith(base));
-        return [...this.files.keys()].filter(k => k.toUpperCase().startsWith(base));
-      }
-      createFile(path, contents = '') {
-        this.files.set(path, contents);
-      }
-      readFile(path) {
-        return this.files.get(path) || '';
-      }
-      writeFile(path, data) {
-        this.files.set(path, data);
-      }
-      deleteFile(path) {
-        this.files.delete(path);
-      }
-      exists(path) {
-        return this.files.has(path);
-      }
+      set(path, content) { this.files.set(this.normalizePath(path), String(content)); }
+      get(path) { return this.files.get(this.normalizePath(path)); }
+      has(path) { return this.files.has(this.normalizePath(path)); }
+      delete(path) { this.files.delete(this.normalizePath(path)); }
+      createDirectory(path) { this.files.set(this.normalizePath(path) + '/__DIR__', 'DIR'); }
     }
 
     class DOSKernel {
       constructor() {
-        this.fs = new Fat16();
-        this.files = this.fs.files;
+        this.fs = new FileSystem();
         this.currentDrive = 'C';
         this.currentDir = 'C:\\';
         this.env = { COMSPEC: 'C:\\COMMAND.COM', PATH: 'C:\\', TEMP: 'C:\\TEMP' };
         this.setupDefaults();
       }
       setupDefaults() {
-        this.files.set('C:\\CONFIG.SYS', 'FILES=20\nBUFFERS=20\nLASTDRIVE=Z\n');
-        this.files.set('C:\\AUTOEXEC.BAT', 'ECHO OFF\nPROMPT $P$G\n');
-        this.files.set('C:\\COMMAND.COM', 'DOS command interpreter');
+        this.fs.set('C:\\CONFIG.SYS', 'FILES=20\nBUFFERS=20\nLASTDRIVE=Z\n');
+        this.fs.set('C:\\AUTOEXEC.BAT', 'ECHO OFF\nPROMPT $P$G\n');
+        this.fs.set('C:\\COMMAND.COM', 'DOS command interpreter');
+        this.fs.createDirectory('C:\\DOS');
       }
       readString(cpu, seg, offset) {
         let out = '';
@@ -841,13 +798,13 @@
           }
           case 0x3C: {
             const path = this.readString(cpu, cpu.regs.DS, cpu.regs.EDX);
-            this.files.set(path, '');
+            this.fs.set(path, '');
             cpu.regs.EAX = 1;
             return 0;
           }
           case 0x3D: {
             const path = this.readString(cpu, cpu.regs.DS, cpu.regs.EDX);
-            cpu.regs.EAX = this.files.has(path) ? 5 : 0xFFFF;
+            cpu.regs.EAX = this.fs.has(path) ? 5 : 0xFFFF;
             return 0;
           }
           case 0x3E: {
@@ -855,11 +812,10 @@
             return 0;
           }
           case 0x3F: {
-            const count = cpu.regs.ECX >>> 0;
             const path = this.readString(cpu, cpu.regs.DS, cpu.regs.EDX);
-            const data = this.files.get(path) || '';
-            const bytes = new TextEncoder().encode(data.slice(0, count));
-            const dst = cpu.linear(cpu.regs.DS, cpu.regs.EDX + 0);
+            const data = this.fs.get(path) || '';
+            const bytes = new TextEncoder().encode(data.slice(0, cpu.regs.ECX));
+            const dst = cpu.linear(cpu.regs.DS, cpu.regs.EDX);
             for (let i = 0; i < bytes.length; i++) cpu.mem.write8(dst + i, bytes[i]);
             cpu.regs.EAX = bytes.length;
             return 0;
@@ -871,7 +827,7 @@
             const chars = [];
             for (let i = 0; i < count; i++) chars.push(String.fromCharCode(cpu.mem.read8(src + i)));
             const text = chars.join('');
-            this.files.set(path, (this.files.get(path) || '') + text);
+            this.fs.set(path, (this.fs.get(path) || '') + text);
             cpu.regs.EAX = count;
             return 0;
           }
@@ -887,41 +843,52 @@
 
     class CommandShell {
       constructor(dos) { this.dos = dos; }
-      runCommand(cmd, vga) {
+      runCommand(cmd) {
         const c = cmd.trim();
         if (!c) return;
-        const parts = c.split(/\s+/);
-        const base = parts[0].toUpperCase();
+        const words = c.split(/\s+/);
+        const base = words[0].toUpperCase();
         switch (base) {
           case 'DIR': {
-            const entries = [...this.dos.files.keys()].map(k => k.replace(/^C:\\/i, ''));
-            entries.forEach(e => logLine(e));
+            const entries = this.dos.fs.files.keys();
+            for (const e of entries) logLine(String(e).replace(/^C:\\/i, ''));
             break;
           }
           case 'CLS':
-            if (vga) {
-              vga.textBuffer.fill(0x0720);
-              vga.cursorX = 0; vga.cursorY = 0; vga.renderText();
-            }
+            document.getElementById('consoleOutput').textContent = '';
             break;
           case 'VER':
             logLine('Microsoft DOS 6.22-compatible environment');
             break;
           case 'ECHO':
-            logLine(parts.slice(1).join(' '));
+            logLine(words.slice(1).join(' '));
             break;
           case 'TYPE':
-            if (parts[1]) {
-              const file = this.dos.files.get('C:\\' + parts[1]) || this.dos.files.get(parts[1]);
-              if (file !== undefined) logLine(file);
+            if (words[1]) {
+              const f = words[1].toUpperCase().startsWith('C:') ? words[1] : 'C:\\' + words[1];
+              if (this.dos.fs.has(f)) logLine(this.dos.fs.get(f));
               else logLine('File not found');
             }
             break;
           case 'HELP':
-            logLine('DIR  CLS  VER  ECHO  TYPE  HELP  EXIT');
+            logLine('DIR   CLS   VER   ECHO   TYPE   HELP   EXIT');
             break;
           case 'EXIT':
             logLine('Leaving DOS...');
+            break;
+          case 'CD':
+            if (words[1]) this.dos.currentDir = 'C:\\' + words[1];
+            else logLine(this.dos.currentDir);
+            break;
+          case 'DEL':
+            if (words[1]) {
+              const f = words[1].toUpperCase().startsWith('C:') ? words[1] : 'C:\\' + words[1];
+              this.dos.fs.delete(f);
+              logLine('File deleted');
+            }
+            break;
+          case 'MEM':
+            logLine('Memory: 004096K total conventional memory');
             break;
           default:
             logLine('Bad command or file name');
@@ -940,7 +907,6 @@
         this.bios = new BIOS(this.mem, this.cpu);
         this.cpu.bios = this.bios;
         this.disk = new VirtualDisk();
-        this.disk.initializeBootSector();
         this.dos = new DOSKernel();
         this.shell = new CommandShell(this.dos);
         this.running = false;
@@ -962,14 +928,22 @@
         this.vga.setMode(0x03);
         this.vga.refresh();
         this.mem.write16(0x7C00 + 510, 0xAA55);
-        this.mem.write8(0x7C00, 0xEB);
-        this.mem.write8(0x7C00 + 1, 0x3C);
-        this.mem.write8(0x7C00 + 2, 0x90);
+        const boot = new Uint8Array(512);
+        boot[0] = 0xEB; boot[1] = 0x3C; boot[2] = 0x90;
+        boot[510] = 0x55; boot[511] = 0xAA;
+        this.mem.writeBytes(0x7C00, boot);
       }
 
       boot() {
         this.running = true;
         this.paused = false;
+        this.cpu.reset();
+        this.cpu.regs.CS = 0xF000;
+        this.cpu.regs.EIP = 0xFFF0;
+        this.cpu.regs.ESP = 0x7C00;
+        this.cpu.regs.SS = 0;
+        this.cpu.regs.ES = 0x9000;
+        this.cpu.regs.DS = 0x9000;
         document.getElementById('vmState').textContent = 'booting';
         logLine('IBM PC-compatible BIOS POST');
         logLine('Memory check: 004096K OK');
@@ -996,29 +970,19 @@
 
       step() {
         if (!this.running || this.paused) return;
-        for (let i = 0; i < 300; i++) {
-          const before = this.cpu.regs.EIP;
-          const r = this.cpu.step();
-          if (r === 0) {
-            document.getElementById('debugOutput').value = JSON.stringify(this.cpu.getState(), null, 2) + '\n' + JSON.stringify(this.bios.lastError || {}, null, 2);
+        const debugBox = document.getElementById('debugOutput');
+        for (let i = 0; i < 500; i++) {
+          const result = this.cpu.step();
+          if (result === 0) {
             this.running = false;
+            debugBox.value = JSON.stringify(this.cpu.getState(), null, 2) + '\n' + JSON.stringify(this.bios.lastError || {}, null, 2);
             document.getElementById('vmState').textContent = 'halted';
-            return;
-          }
-          if (this.keyboard.hasKey()) {
-            const key = this.keyboard.readKey();
-            const ch = key & 0xFF;
-            if (ch === 13) { logLine(''); }
-            else if (ch === 8) { /* backspace ignored for now */ }
-            else if (ch >= 32 && ch <= 126) { logLine(String.fromCharCode(ch)); }
-          }
-          if (this.cpu.regs.EIP === before && this.cpu.lastInstr.includes('UNSUPPORTED')) {
-            this.running = false;
+            logLine('VM halted: ' + (this.bios.lastError ? this.bios.lastError.detail : this.cpu.lastInstr));
             return;
           }
         }
         document.getElementById('modeLabel').textContent = this.cpu.mode;
-        document.getElementById('debugOutput').value = JSON.stringify(this.cpu.getState(), null, 2);
+        debugBox.value = JSON.stringify(this.cpu.getState(), null, 2);
       }
 
       reset() {
@@ -1037,13 +1001,10 @@
       const c = document.getElementById('display');
       if (c.requestFullscreen) c.requestFullscreen();
     });
-    document.getElementById('factoryBtn').addEventListener('click', () => {
-      location.reload();
-    });
+    document.getElementById('factoryBtn').addEventListener('click', () => location.reload());
     document.getElementById('cpuHz').addEventListener('change', (e) => {
       document.getElementById('clockLabel').textContent = e.target.value + ' MHz';
     });
-
     document.getElementById('importBtn').addEventListener('click', () => {
       document.getElementById('fileInput').click();
     });
@@ -1054,9 +1015,8 @@
         const reader = new FileReader();
         reader.onload = () => {
           const bytes = new Uint8Array(reader.result);
-          const dec = new TextDecoder('latin1');
-          const text = dec.decode(bytes.slice(0, 4096));
-          vm.dos.files.set('C:\\' + file.name, text);
+          const text = Array.from(bytes).map(b => String.fromCharCode(b)).join('');
+          vm.dos.fs.set('C:\\' + file.name, text);
           logLine('Imported: ' + file.name);
         };
         reader.readAsArrayBuffer(file);
@@ -1067,6 +1027,29 @@
     document.getElementById('clockLabel').textContent = '33 MHz';
     document.getElementById('ramLabel').textContent = '4 MB';
     document.getElementById('vmState').textContent = 'powered off';
+
+    const input = document.createElement('input');
+    input.setAttribute('placeholder', 'Type a DOS command');
+    input.style.position = 'fixed';
+    input.style.bottom = '12px';
+    input.style.left = '12px';
+    input.style.right = '12px';
+    input.style.padding = '10px';
+    input.style.borderRadius = '8px';
+    input.style.border = '1px solid rgba(255,255,255,.08)';
+    input.style.background = '#121820';
+    input.style.color = '#e8edf3';
+    input.style.zIndex = '10';
+    document.body.appendChild(input);
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        vm.shell.runCommand(input.value);
+        input.value = '';
+        logLine('C:\\>');
+      }
+    });
+
     logLine('System ready.');
   </script>
 </body>
